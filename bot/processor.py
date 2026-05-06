@@ -50,20 +50,61 @@ def detect_source_type(text: str, mime_type: str = '') -> str:
 # YouTube / видео с субтитрами
 # ──────────────────────────────────────────────
 
+def _extract_youtube_supadata(video_id: str) -> str:
+    """
+    Получает транскрипт через Supadata.ai API.
+    Работает с любых IP, включая облачные провайдеры.
+    """
+    try:
+        api_key = os.getenv('SUPADATA_API_KEY', '')
+        headers = {'x-api-key': api_key} if api_key else {}
+        resp = requests.get(
+            f'https://api.supadata.ai/v1/youtube/transcript',
+            params={'url': f'https://www.youtube.com/watch?v={video_id}', 'text': 'true'},
+            headers=headers,
+            timeout=20
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            # Supadata возвращает либо строку (text=true), либо список сегментов
+            if isinstance(data, str):
+                return data
+            if isinstance(data, dict):
+                content = data.get('content', data.get('transcript', ''))
+                if isinstance(content, str):
+                    return content
+                if isinstance(content, list):
+                    return ' '.join(
+                        s.get('text', '') if isinstance(s, dict) else str(s)
+                        for s in content
+                    )
+        logger.warning(f"Supadata API: status {resp.status_code}")
+    except Exception as e:
+        logger.warning(f"Supadata failed: {e}")
+    return ''
+
+
 def extract_youtube(url: str) -> Tuple[str, str]:
     """
     Возвращает (transcript_text, video_title).
-    Сначала пробует youtube-transcript-api, потом yt-dlp.
+    Цепочка: Supadata → youtube-transcript-api → yt-dlp → Whisper
     """
+    video_id = _parse_youtube_id(url)
+
+    # 1. Supadata.ai — работает с облачных IP без блокировок
+    if video_id:
+        text = _extract_youtube_supadata(video_id)
+        if text.strip():
+            logger.info("Transcript via Supadata OK")
+            return text, url
+
+    # 2. youtube-transcript-api (работает локально)
     try:
         from youtube_transcript_api import YouTubeTranscriptApi
-        video_id = _parse_youtube_id(url)
         if not video_id:
             raise ValueError("Не удалось извлечь video_id")
 
         api = YouTubeTranscriptApi()
-
-        # Предпочитаем русский, потом английский, потом любой
         try:
             transcript_list = api.list(video_id)
             try:
@@ -72,18 +113,20 @@ def extract_youtube(url: str) -> Tuple[str, str]:
                 transcript = next(iter(transcript_list))
             snippets = transcript.fetch()
         except Exception:
-            # Fallback: прямой fetch
             snippets = api.fetch(video_id)
 
         text = ' '.join(
             s.get('text', s) if isinstance(s, dict) else str(s)
             for s in snippets
         )
-        return text, url
+        if text.strip():
+            return text, url
 
     except Exception as e:
         logger.warning(f"youtube-transcript-api failed: {e}, trying yt-dlp")
-        return _extract_youtube_ydlp(url)
+
+    # 3. yt-dlp → Whisper
+    return _extract_youtube_ydlp(url)
 
 
 def _parse_youtube_id(url: str) -> str:
