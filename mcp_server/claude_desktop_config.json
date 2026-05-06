@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "hypothesis-tracker": {
+      "command": "python",
+      "args": [
+        "C:\\Users\\79923\\Desktop\\Бот с идеями\\Бот с идеями\\mcp_server\\server.py"
+      ]
+    }
+  }
+}
