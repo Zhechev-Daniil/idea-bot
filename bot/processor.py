@@ -100,6 +100,23 @@ def _parse_youtube_id(url: str) -> str:
 
 def _get_ydlp_cookies_opts() -> dict:
     """Возвращает опции куки для yt-dlp."""
+    import base64
+
+    # Для Railway: cookies в base64 через переменную окружения
+    cookies_b64 = os.getenv('YTDLP_COOKIES_CONTENT', '')
+    if cookies_b64:
+        try:
+            import tempfile
+            content = base64.b64decode(cookies_b64).decode('utf-8')
+            tmp = tempfile.NamedTemporaryFile(
+                mode='w', suffix='.txt', delete=False, encoding='utf-8'
+            )
+            tmp.write(content)
+            tmp.close()
+            return {'cookiefile': tmp.name}
+        except Exception as e:
+            logger.warning(f"Failed to decode YTDLP_COOKIES_CONTENT: {e}")
+
     browser = os.getenv('YTDLP_COOKIES_BROWSER', '')
     cookies_file = os.getenv('YTDLP_COOKIES_FILE', '')
     if browser:
