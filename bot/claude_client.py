@@ -119,12 +119,16 @@ async def generate_hypothesis(
     """
     model = os.getenv('CLAUDE_MODEL', 'anthropic/claude-sonnet-4-6')
 
+    # Загружаем персональный контекст пользователя
+    user_context = _load_prompt('user_context.md')
+
     prompt_template = _load_prompt('hypothesis_gen.md')
     prompt = _fill_template(prompt_template, {
         'source_type': source_type,
         'source_url': source_url,
         'context': context,
-        'extracted_content': cleaned_content
+        'extracted_content': cleaned_content,
+        'user_context': user_context,
     })
 
     try:
@@ -160,9 +164,4 @@ async def content_to_hypothesis(
     if not extraction.get('is_useful', False):
         return extraction, {}
 
-    cleaned = extraction.get('cleaned_content', raw_text)
-
-    # Шаг 2: Генерация гипотезы
-    hypothesis = await generate_hypothesis(cleaned, source_type, source_url, context)
-
-    return extraction, hypothesis
+    cleaned = extraction.get('cleaned_content', r
