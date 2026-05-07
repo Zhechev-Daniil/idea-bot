@@ -4,7 +4,6 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Бот с идеями — Дашборд гипотез</title>
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
 <style>
   :root {
@@ -185,28 +184,6 @@
 </head>
 <body>
 
-<div id="config-modal" class="modal-overlay">
-  <div class="modal">
-    <h2>⚙️ Настройка подключения</h2>
-    <div style="display:flex;flex-direction:column;gap:12px;">
-      <div class="form-group">
-        <label class="form-label">Supabase URL</label>
-        <input class="form-input" id="cfg-url" placeholder="https://xxx.supabase.co">
-      </div>
-      <div class="form-group">
-        <label class="form-label">Supabase Anon Key</label>
-        <input class="form-input" id="cfg-key" placeholder="eyJhbGci...">
-      </div>
-      <div class="form-group">
-        <label class="form-label">Anthropic API Key (для чата с Opus)</label>
-        <input class="form-input" id="cfg-anthropic" placeholder="sk-ant-...">
-      </div>
-    </div>
-    <div class="modal-actions">
-      <button class="btn btn-primary" onclick="saveConfig()">Сохранить и подключиться</button>
-    </div>
-  </div>
-</div>
 
 <div class="app">
   <!-- Sidebar -->
@@ -257,7 +234,6 @@
         <div class="main-subtitle" id="main-subtitle">Выбери гипотезу из списка</div>
       </div>
       <div style="display:flex;gap:8px;">
-        <button class="btn btn-ghost" onclick="showConfig()">⚙️ Настройки</button>
         <button class="btn btn-ghost" onclick="loadHypotheses()">↻ Обновить</button>
       </div>
     </div>
@@ -286,47 +262,81 @@
 
 <script>
 // ============================================================
-// CONFIG
+// CONFIG — hardcoded credentials, no modal needed
 // ============================================================
-let supabase = null;
+const SUPABASE_URL = 'https://plrzlldtrnkwpozfyleq.supabase.co';
+const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBscnpsbGR0cm5rd3BvemZ5bGVxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzgwNjA2OTQsImV4cCI6MjA5MzYzNjY5NH0.Q54--22P773NEdsHaE862xhmhYetbvi2eVxfVJ1Ypr4';
+
+// ============================================================
+// LIGHTWEIGHT SUPABASE REST CLIENT (no external SDK needed)
+// ============================================================
+function makeSupabase(baseUrl, key) {
+  const rest = baseUrl.replace(/\/$/, '') + '/rest/v1';
+  const hdrs = {
+    'apikey': key,
+    'Authorization': 'Bearer ' + key,
+    'Content-Type': 'application/json',
+    'Prefer': 'return=representation'
+  };
+
+  function handleResp(r) {
+    if (r.ok) return r.json().then(data => ({ data, error: null }));
+    return r.text().then(t => ({ data: null, error: { message: r.status + ': ' + t } }));
+  }
+
+  return {
+    from(table) {
+      return {
+        select(cols) {
+          cols = cols || '*';
+          var params = ['select=' + cols];
+          var chain = {
+            eq(col, val) { params.push(col + '=eq.' + val); return chain; },
+            order(col, opts) {
+              var dir = (opts && opts.ascending === false) ? 'desc' : 'asc';
+              params.push('order=' + col + '.' + dir);
+              return chain;
+            },
+            limit(n) { params.push('limit=' + n); return chain; },
+            then(res, rej) {
+              return fetch(rest + '/' + table + '?' + params.join('&'), { headers: hdrs })
+                .then(handleResp).then(res, rej);
+            }
+          };
+          return chain;
+        },
+        insert(data) {
+          var body = Array.isArray(data) ? data : [data];
+          return {
+            then(res, rej) {
+              return fetch(rest + '/' + table, { method: 'POST', headers: hdrs, body: JSON.stringify(body) })
+                .then(handleResp).then(res, rej);
+            }
+          };
+        },
+        update(data) {
+          var params = [];
+          var chain = {
+            eq(col, val) { params.push(col + '=eq.' + val); return chain; },
+            then(res, rej) {
+              var qs = params.length ? '?' + params.join('&') : '';
+              return fetch(rest + '/' + table + qs, { method: 'PATCH', headers: hdrs, body: JSON.stringify(data) })
+                .then(r => ({ data: null, error: r.ok ? null : { message: r.status } }))
+                .then(res, rej);
+            }
+          };
+          return chain;
+        }
+      };
+    }
+  };
+}
+
+const supabase = makeSupabase(SUPABASE_URL, SUPABASE_KEY);
 let hypotheses = [];
 let currentHypId = null;
 let currentFilter = 'all';
 let chartInstance = null;
-
-function loadConfig() {
-  return {
-    url: localStorage.getItem('sb_url') || '',
-    key: localStorage.getItem('sb_key') || '',
-    anthropic: localStorage.getItem('anthropic_key') || ''
-  };
-}
-
-function saveConfig() {
-  const url = document.getElementById('cfg-url').value.trim();
-  const key = document.getElementById('cfg-key').value.trim();
-  const anthropic = document.getElementById('cfg-anthropic').value.trim();
-  if (!url || !key) { showToast('Заполни URL и Key', 'error'); return; }
-  localStorage.setItem('sb_url', url);
-  localStorage.setItem('sb_key', key);
-  if (anthropic) localStorage.setItem('anthropic_key', anthropic);
-  document.getElementById('config-modal').style.display = 'none';
-  initSupabase(url, key);
-  loadHypotheses();
-}
-
-function showConfig() {
-  const cfg = loadConfig();
-  document.getElementById('cfg-url').value = cfg.url;
-  document.getElementById('cfg-key').value = cfg.key;
-  document.getElementById('cfg-anthropic').value = cfg.anthropic;
-  document.getElementById('config-modal').style.display = 'flex';
-}
-
-function initSupabase(url, key) {
-  const { createClient } = window.supabase;
-  supabase = createClient(url, key);
-}
 
 // ============================================================
 // DATA
@@ -776,14 +786,8 @@ function showToast(msg, type = '') {
 // INIT
 // ============================================================
 (function init() {
-  const cfg = loadConfig();
-  if (cfg.url && cfg.key) {
-    document.getElementById('config-modal').style.display = 'none';
-    initSupabase(cfg.url, cfg.key);
-    loadHypotheses();
-    // Автообновление каждые 30 сек
-    setInterval(loadHypotheses, 30000);
-  }
+  loadHypotheses();
+  setInterval(loadHypotheses, 30000);
 })();
 </script>
 </body>
