@@ -606,6 +606,10 @@ function renderDetail(h, updates, notes) {
         </div>
       </div>
       <div class="detail-actions">
+        ${h.context_type==='startup'
+          ? `<button class="btn btn-ghost" style="font-size:12px;padding:5px 10px;" title="Переключить на Личный бренд" onclick="switchContext('${h.id}','personal_brand')">👤 → Личный бренд</button>`
+          : `<button class="btn btn-ghost" style="font-size:12px;padding:5px 10px;" title="Переключить на Бизнес" onclick="switchContext('${h.id}','startup')">🏢 → Бизнес</button>`
+        }
         <button class="btn-icon" title="Удалить гипотезу" onclick="requestDelete('${h.id}')">🗑</button>
       </div>
     </div>
@@ -687,6 +691,16 @@ function renderDetailChart(updates, metricName) {
 }
 
 // ── ACTIONS ──────────────────────────────────────────────────
+async function switchContext(id, newCtx) {
+  const { error } = await sb.from('hypotheses').update({ context_type: newCtx }).eq('id', id);
+  if (error) { showToast('Ошибка: ' + error.message, 'error'); return; }
+  const label = newCtx === 'startup' ? '🏢 Бизнес' : '👤 Личный бренд';
+  showToast('Контекст изменён: ' + label, 'success');
+  await loadHypotheses();
+  const updated = hypotheses.find(h => h.id === id);
+  if (updated) showHypothesis(updated);
+}
+
 async function updateStatus(id, status) {
   const { error } = await sb.from('hypotheses').update({ status }).eq('id', id);
   if (error) { showToast('Ошибка: '+error.message,'error'); return; }
