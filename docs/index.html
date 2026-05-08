@@ -39,6 +39,28 @@ body { background: var(--bg); color: var(--text); font-family: -apple-system, Bl
 .brand-name { font-size: 13px; font-weight: 600; }
 .brand-version { font-size: 10px; color: var(--text-muted); }
 
+/* Context filter tabs */
+.ctx-tabs { display: flex; gap: 4px; padding: 10px 8px 4px; border-bottom: 1px solid var(--border); flex-shrink: 0; }
+.ctx-tab { flex: 1; padding: 6px 4px; border-radius: var(--radius-sm); font-size: 11px; font-weight: 600; text-align: center; cursor: pointer; background: var(--surface2); color: var(--text-muted); border: 1px solid var(--border); transition: all 0.15s; }
+.ctx-tab:hover { border-color: var(--accent); color: var(--accent); }
+.ctx-tab.active { background: var(--accent); color: white; border-color: var(--accent); }
+.ctx-tab.personal.active { background: #7c3aed; border-color: #7c3aed; }
+.ctx-tab.business.active { background: #0369a1; border-color: #0369a1; }
+
+/* Context badge on list items */
+.ctx-badge { font-size: 9px; font-weight: 700; padding: 1px 5px; border-radius: 8px; margin-left: auto; flex-shrink: 0; }
+.ctx-badge-startup { background: #dbeafe; color: #0369a1; }
+.ctx-badge-personal_brand { background: #ede9fe; color: #7c3aed; }
+.ctx-badge-both { background: var(--surface2); color: var(--text-muted); }
+
+/* Home context filter bar */
+.home-ctx-bar { display: flex; gap: 6px; margin-bottom: 4px; }
+.home-ctx-btn { padding: 5px 14px; border-radius: 20px; font-size: 12px; font-weight: 600; cursor: pointer; border: 1px solid var(--border); background: var(--surface); color: var(--text-muted); transition: all 0.15s; }
+.home-ctx-btn:hover { border-color: var(--accent); color: var(--accent); }
+.home-ctx-btn.active { background: var(--accent); color: white; border-color: var(--accent); }
+.home-ctx-btn.personal.active { background: #7c3aed; border-color: #7c3aed; }
+.home-ctx-btn.business.active { background: #0369a1; border-color: #0369a1; }
+
 .nav-section { padding: 12px 8px 4px; }
 .nav-label { font-size: 10px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.6px; padding: 0 8px; margin-bottom: 4px; }
 .nav-item { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: var(--radius-sm); cursor: pointer; color: var(--text-muted); font-size: 13px; font-weight: 500; transition: all 0.15s; margin-bottom: 2px; }
@@ -233,6 +255,11 @@ body { background: var(--bg); color: var(--text); font-family: -apple-system, Bl
         <button class="btn btn-ghost" onclick="loadHypotheses()">↻ Обновить</button>
       </div>
       <div class="home-scroll">
+        <div class="home-ctx-bar">
+          <div class="home-ctx-btn active" id="home-ctx-all" onclick="setHomeCtx('all',this)">Все</div>
+          <div class="home-ctx-btn business" id="home-ctx-startup" onclick="setHomeCtx('startup',this)">🏢 Бизнес (СОЗИДАЙ)</div>
+          <div class="home-ctx-btn personal" id="home-ctx-personal_brand" onclick="setHomeCtx('personal_brand',this)">👤 Личный бренд (Даниил)</div>
+        </div>
         <div class="stats-grid">
           <div class="stat-card accent">
             <div class="stat-label">Всего гипотез</div>
@@ -290,6 +317,11 @@ body { background: var(--bg); color: var(--text); font-family: -apple-system, Bl
               <span class="chip" onclick="setFilter('success',this)">Успех</span>
               <span class="chip" onclick="setFilter('failure',this)">Провал</span>
             </div>
+          </div>
+          <div class="ctx-tabs">
+            <div class="ctx-tab active" id="ctxtab-all" onclick="setCtxFilter('all',this)">Все</div>
+            <div class="ctx-tab business" id="ctxtab-startup" onclick="setCtxFilter('startup',this)">🏢 Бизнес</div>
+            <div class="ctx-tab personal" id="ctxtab-personal_brand" onclick="setCtxFilter('personal_brand',this)">👤 Личный бренд</div>
           </div>
           <div class="hyp-list-scroll" id="hyp-list"></div>
         </div>
@@ -370,7 +402,8 @@ function makeSupabase(base, key) {
 }
 
 const sb = makeSupabase(SUPABASE_URL, SUPABASE_KEY);
-let hypotheses = [], currentHypId = null, currentFilter = 'all';
+let hypotheses = [], currentHypId = null, currentFilter = 'all', currentCtxFilter = 'all';
+let homeCtxFilter = 'all';
 let barChart = null, donutChart = null, detailChart = null;
 let pendingDeleteId = null, currentPage = 'home';
 
@@ -404,14 +437,25 @@ async function loadHypotheses() {
   }
 }
 
+// ── HOME CONTEXT FILTER ──────────────────────────────────────
+function setHomeCtx(ctx, el) {
+  homeCtxFilter = ctx;
+  document.querySelectorAll('.home-ctx-btn').forEach(b=>b.classList.remove('active'));
+  el.classList.add('active');
+  renderHome();
+}
+
 // ── HOME PAGE ────────────────────────────────────────────────
 function renderHome() {
-  const total = hypotheses.length;
-  const inp = hypotheses.filter(h=>h.status==='in_progress').length;
-  const succ = hypotheses.filter(h=>h.status==='success').length;
-  const fail = hypotheses.filter(h=>h.status==='failure').length;
-  const pend = hypotheses.filter(h=>h.status==='pending').length;
-  const arch = hypotheses.filter(h=>h.status==='archived').length;
+  const src = homeCtxFilter === 'all' ? hypotheses
+    : hypotheses.filter(h => ctxMatch(h, homeCtxFilter));
+
+  const total = src.length;
+  const inp = src.filter(h=>h.status==='in_progress').length;
+  const succ = src.filter(h=>h.status==='success').length;
+  const fail = src.filter(h=>h.status==='failure').length;
+  const pend = src.filter(h=>h.status==='pending').length;
+  const arch = src.filter(h=>h.status==='archived').length;
   const rate = total ? Math.round(succ/total*100) : 0;
 
   document.getElementById('home-total').textContent = total;
@@ -425,7 +469,7 @@ function renderHome() {
   const months = ['Янв','Фев','Мар','Апр','Май','Июн','Июл','Авг','Сен','Окт','Ноя','Дек'];
   const counts = new Array(12).fill(0);
   const curMonth = new Date().getMonth();
-  hypotheses.forEach(h => { const d = new Date(h.created_at); if(d.getFullYear()===yr) counts[d.getMonth()]++; });
+  src.forEach(h => { const d = new Date(h.created_at); if(d.getFullYear()===yr) counts[d.getMonth()]++; });
 
   if (barChart) { barChart.destroy(); barChart = null; }
   const bCtx = document.getElementById('home-bar-chart');
@@ -463,19 +507,19 @@ function renderHome() {
       <div><span class="legend-count">${s.count}</span><span class="legend-pct">${total?Math.round(s.count/total*100):0}%</span></div>
     </div>`).join('');
 
-  // Recent list
+  // Recent list (filtered by context)
   const srcIcon = {youtube:'▶',article:'📄',voice:'🎤',document:'📎'};
-  document.getElementById('home-recent').innerHTML = hypotheses.slice(0,6).map(h=>`
+  document.getElementById('home-recent').innerHTML = src.slice(0,6).map(h=>`
     <div class="recent-item" onclick="goToHypothesis('${h.id}')">
       <div class="recent-item-left">
         <div class="recent-icon">${srcIcon[h.source_type]||'💡'}</div>
         <div>
           <div class="recent-title">${escHtml(h.title)}</div>
-          <div class="recent-sub">${fmtDate(h.created_at)} · ${statusLabel(h.status)}</div>
+          <div class="recent-sub">${fmtDate(h.created_at)} · ${statusLabel(h.status)} · ${ctxLabel(h.context_type)}</div>
         </div>
       </div>
       <span class="badge badge-${h.status}">${statusLabel(h.status)}</span>
-    </div>`).join('');
+    </div>`).join('') || '<div style="color:var(--text-muted);font-size:12px;padding:12px 0;text-align:center;">Нет гипотез</div>';
 }
 
 function goToHypothesis(id) {
@@ -493,14 +537,34 @@ function setFilter(filter, el) {
   renderSidebar();
 }
 
+function setCtxFilter(ctx, el) {
+  currentCtxFilter = ctx;
+  document.querySelectorAll('.ctx-tab').forEach(c=>c.classList.remove('active'));
+  el.classList.add('active');
+  renderSidebar();
+}
+
+// Проверяет совпадение гипотезы с контекстным фильтром
+function ctxMatch(h, ctx) {
+  if (ctx === 'all') return true;
+  const ct = h.context_type || 'both';
+  if (ct === 'both') return true;  // «both» показываем везде
+  return ct === ctx;
+}
+
 function renderSidebar() {
   const list = document.getElementById('hyp-list');
   if (!list) return;
-  let filtered = currentFilter==='all' ? hypotheses : hypotheses.filter(h=>h.status===currentFilter);
+  let filtered = hypotheses;
+  if (currentFilter !== 'all') filtered = filtered.filter(h=>h.status===currentFilter);
+  if (currentCtxFilter !== 'all') filtered = filtered.filter(h=>ctxMatch(h, currentCtxFilter));
   if (!filtered.length) { list.innerHTML='<div style="padding:20px;text-align:center;color:var(--text-muted);font-size:12px;">Нет гипотез</div>'; return; }
   list.innerHTML = filtered.map(h=>`
     <div class="hyp-item ${currentHypId===h.id?'active':''}" onclick="showHypothesis(${JSON.stringify(h).replace(/"/g,'&quot;')})">
-      <div class="hyp-item-title">${escHtml(h.title)}</div>
+      <div style="display:flex;align-items:flex-start;gap:6px;">
+        <div class="hyp-item-title" style="flex:1;">${escHtml(h.title)}</div>
+        <span class="ctx-badge ctx-badge-${h.context_type||'both'}">${ctxBadgeText(h.context_type)}</span>
+      </div>
       <div class="hyp-item-meta"><div class="status-dot dot-${h.status}"></div><span>${statusLabel(h.status)} · ${fmtDate(h.created_at)}</span></div>
     </div>`).join('');
 }
@@ -536,6 +600,7 @@ function renderDetail(h, updates, notes) {
         <div class="detail-title">${escHtml(h.title)}</div>
         <div class="detail-meta-row">
           <span class="badge badge-${h.status}">${statusEmoji(h.status)} ${statusLabel(h.status)}</span>
+          ${h.context_type&&h.context_type!=='both'?`<span class="tag" style="${h.context_type==='startup'?'background:#dbeafe;color:#0369a1':'background:#ede9fe;color:#7c3aed'}">${ctxLabel(h.context_type)}</span>`:''}
           ${tags.map(t=>`<span class="tag">${escHtml(t)}</span>`).join('')}
           ${h.source_url?`<a class="source-link" href="${h.source_url}" target="_blank">↗ Источник</a>`:''}
         </div>
@@ -635,3 +700,113 @@ async function addMetricUpdate(hypId) {
   const value = parseFloat(document.getElementById('upd-value').value);
   const note = document.getElementById('upd-note').value.trim();
   if (!date||isNaN(value)) { showToast('Заполни дату и значение','error'); return; }
+  const { error } = await sb.from('metric_updates').insert({ hypothesis_id:hypId, date, metric_name:metric, metric_value:value, note:note||null });
+  if (error) { showToast('Ошибка: '+error.message,'error'); return; }
+  showToast('Метрика добавлена','success');
+  document.getElementById('upd-value').value='';
+  document.getElementById('upd-note').value='';
+  const h = hypotheses.find(h=>h.id===hypId);
+  if (h) {
+    const [{data:updates},{data:notes}] = await Promise.all([
+      sb.from('metric_updates').select('*').eq('hypothesis_id',hypId).order('date',{ascending:true}),
+      sb.from('hypothesis_notes').select('*').eq('hypothesis_id',hypId).order('created_at',{ascending:false})
+    ]);
+    renderDetail(h, updates||[], notes||[]);
+  }
+}
+
+async function saveResult(id) {
+  const summary = document.getElementById('result-text').value.trim();
+  const { error } = await sb.from('hypotheses').update({ result_summary:summary }).eq('id', id);
+  if (error) { showToast('Ошибка: '+error.message,'error'); return; }
+  showToast('Итог сохранён','success');
+}
+
+function toggleTask(i) {
+  const el = document.getElementById('task-'+i);
+  if (!el) return;
+  const done = el.classList.toggle('done');
+  localStorage.setItem('task_'+currentHypId+'_'+i, done?'1':'0');
+}
+
+// ── DELETE ───────────────────────────────────────────────────
+function requestDelete(id) {
+  pendingDeleteId = id;
+  document.getElementById('delete-modal').classList.add('show');
+}
+function closeDeleteModal() {
+  pendingDeleteId = null;
+  document.getElementById('delete-modal').classList.remove('show');
+}
+async function confirmDelete() {
+  if (!pendingDeleteId) return;
+  const id = pendingDeleteId;
+  closeDeleteModal();
+  await Promise.all([
+    sb.from('metric_updates').remove().eq('hypothesis_id', id),
+    sb.from('hypothesis_notes').remove().eq('hypothesis_id', id)
+  ]);
+  const { error } = await sb.from('hypotheses').remove().eq('id', id);
+  if (error) { showToast('Ошибка удаления: '+error.message,'error'); return; }
+  showToast('Гипотеза удалена','success');
+  currentHypId = null;
+  document.getElementById('hyp-detail').style.display = 'none';
+  document.getElementById('empty-state').style.display = '';
+  await loadHypotheses();
+}
+
+// ── COPY CONTEXT ─────────────────────────────────────────────
+async function copyContextForClaude() {
+  const today = new Date().toLocaleDateString('ru-RU',{day:'numeric',month:'long',year:'numeric'});
+  const lines = [
+    '# Контекст: Дашборд гипотез', 'Дата: '+today+'\n',
+    '## Статистика',
+    '- Всего: '+hypotheses.length,
+    '- В работе: '+hypotheses.filter(h=>h.status==='in_progress').length,
+    '- Ожидают: '+hypotheses.filter(h=>h.status==='pending').length,
+    '- Подтверждено: '+hypotheses.filter(h=>h.status==='success').length,
+    '- Опровергнуто: '+hypotheses.filter(h=>h.status==='failure').length+'\n',
+  ];
+  if (currentHypId) {
+    const h = hypotheses.find(h=>h.id===currentHypId);
+    if (h) {
+      lines.push('## Открытая: «'+h.title+'»');
+      lines.push('**Статус:** '+statusLabel(h.status));
+      if (h.hypothesis_statement) lines.push('**Гипотеза:** '+h.hypothesis_statement);
+      if (h.audience) lines.push('**Аудитория:** '+h.audience);
+      if (h.primary_metric_name) lines.push('**Метрика:** '+h.primary_metric_name+' → цель: '+(h.primary_metric_target||'?'));
+      if (h.deadline) lines.push('**Дедлайн:** '+fmtDate(h.deadline));
+      if (h.result_summary) lines.push('**Итог:** '+h.result_summary);
+    }
+  }
+  const active = hypotheses.filter(h=>['in_progress','pending'].includes(h.status));
+  if (active.length) {
+    lines.push('\n## Активные');
+    active.forEach(h=>lines.push('- **'+h.title+'** ['+statusLabel(h.status)+']'));
+  }
+  try {
+    await navigator.clipboard.writeText(lines.join('\n'));
+    const btn = document.getElementById('copy-ctx-btn');
+    btn.innerHTML = '✓ Скопировано!';
+    setTimeout(()=>{ btn.innerHTML='🤖 Контекст для Claude'; }, 2500);
+    showToast('Контекст скопирован','success');
+  } catch(e) { showToast('Не удалось скопировать','error'); }
+}
+
+// ── HELPERS ──────────────────────────────────────────────────
+function statusLabel(s){ return {pending:'Ожидает',in_progress:'В работе',success:'Подтверждено',failure:'Опровергнуто',archived:'Архив'}[s]||s; }
+function statusEmoji(s){ return {pending:'⏳',in_progress:'🔵',success:'✅',failure:'❌',archived:'📦'}[s]||''; }
+function confidenceLabel(c){ return {low:'🟡 Низкая',medium:'🟠 Средняя',high:'🟢 Высокая'}[c]||c||'—'; }
+function ctxLabel(ct){ return {startup:'🏢 Бизнес',personal_brand:'👤 Личный бренд',both:''}[ct]||''; }
+function ctxBadgeText(ct){ return {startup:'🏢',personal_brand:'👤',both:''}[ct]||''; }
+function fmtDate(d){ if(!d)return'—'; return new Date(d).toLocaleDateString('ru-RU',{day:'numeric',month:'short',year:'numeric'}); }
+function timeAgo(d){ if(!d)return''; const m=Math.floor((Date.now()-new Date(d))/60000); if(m<60)return m+'м. назад'; const h=Math.floor(m/60); if(h<24)return h+'ч. назад'; return Math.floor(h/24)+'д. назад'; }
+function escHtml(s){ if(!s)return''; return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+function showToast(msg,type){ const t=document.getElementById('toast'); t.textContent=msg; t.className='toast show'+(type?' '+type:''); setTimeout(()=>t.classList.remove('show'),3000); }
+
+// ── INIT ─────────────────────────────────────────────────────
+loadHypotheses();
+setInterval(loadHypotheses, 30000);
+</script>
+</body>
+</html>

@@ -16,6 +16,7 @@ from telegram.ext import (
     Application,
     CommandHandler,
     MessageHandler,
+    CallbackQueryHandler,
     filters,
     ContextTypes
 )
@@ -25,7 +26,8 @@ from handlers import (
     handle_text,
     handle_voice,
     handle_video_note,
-    handle_document
+    handle_document,
+    handle_context_choice,
 )
 
 # ──────────────────────────────────────────────
@@ -67,6 +69,9 @@ def main():
     # Команды
     app.add_handler(CommandHandler('start', cmd_start))
     app.add_handler(CommandHandler('help', cmd_start))
+
+    # Кнопки выбора контекста
+    app.add_handler(CallbackQueryHandler(handle_context_choice, pattern='^ctx_'))
 
     # Сообщения
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))

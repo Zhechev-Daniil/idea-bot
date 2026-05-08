@@ -3,19 +3,20 @@ handlers.py — Обработчики сообщений Telegram бота.
 
 Поток обработки:
   1. Пользователь присылает URL / файл / голосовое
-  2. Определяем тип контента
-  3. Извлекаем текст через processor.py
-  4. Генерируем гипотезу через claude_client.py
-  5. Сохраняем в Supabase
-  6. Отправляем подтверждение пользователю
+  2. Бот задаёт вопрос: «Для кого генерировать гипотезу?»
+     с кнопками [🏢 СОЗИДАЙ] и [👤 Даниил]
+  3. Пользователь нажимает кнопку
+  4. Извлекаем текст через processor.py
+  5. Генерируем гипотезу через claude_client.py (с выбранным контекстом)
+  6. Сохраняем в Supabase
+  7. Отправляем результат
 """
 
 import os
 import logging
 import tempfile
-from datetime import date, timedelta
 
-from telegram import Update, Message
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 from telegram.constants import ChatAction
 
@@ -26,7 +27,19 @@ from db import save_hypothesis
 logger = logging.getLogger(__name__)
 
 ALLOWED_USER_ID = int(os.getenv('ALLOWED_USER_ID', '0'))
-HYPOTHESIS_CONTEXT = os.getenv('HYPOTHESIS_CONTEXT', 'both')
+
+# Inline-клавиатура выбора контекста
+CONTEXT_KEYBOARD = InlineKeyboardMarkup([
+    [
+        InlineKeyboardButton("🏢 СОЗИДАЙ (бизнес)", callback_data="ctx_startup"),
+        InlineKeyboardButton("👤 Даниил (личный бренд)", callback_data="ctx_personal_brand"),
+    ]
+])
+
+CTX_LABELS = {
+    'ctx_startup': ('startup', '🏢 СОЗИДАЙ'),
+    'ctx_personal_brand': ('personal_brand', '👤 Даниил'),
+}
 
 
 # ──────────────────────────────────────────────
@@ -36,7 +49,7 @@ HYPOTHESIS_CONTEXT = os.getenv('HYPOTHESIS_CONTEXT', 'both')
 def is_allowed(update: Update) -> bool:
     """Бот отвечает только владельцу."""
     if not ALLOWED_USER_ID:
-        return True  # Если не задан — разрешаем всем (для теста)
+        return True
     return update.effective_user.id == ALLOWED_USER_ID
 
 
@@ -48,13 +61,47 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_allowed(update):
         return
     await update.message.reply_text(
-        "👋 Привет! Я превращаю контент в гипотезы для твоего стартапа и личного бренда.\n\n"
+        "👋 Привет! Я превращаю контент в гипотезы для стартапа и личного бренда.\n\n"
         "Пришли мне:\n"
         "• 🔗 Ссылку на YouTube, статью, Reels, TikTok\n"
         "• 🎙 Голосовое сообщение\n"
         "• 📄 PDF или DOCX документ\n"
         "• 🎬 Видеофайл\n\n"
-        "Я проанализирую и сформирую проверяемую гипотезу с метриками."
+        "После этого выбери, для кого генерировать гипотезу — "
+        "для стартапа 🏢 СОЗИДАЙ или личного бренда 👤 Даниил."
+    )
+
+
+# ──────────────────────────────────────────────
+# Хранение ожидающего контента в user_data
+# ──────────────────────────────────────────────
+
+def _store_pending(context: ContextTypes.DEFAULT_TYPE, user_id: int,
+                   source_type: str, source_url: str,
+                   file_path: str = '', mime_type: str = ''):
+    """Сохраняет данные контента в user_data до выбора контекста."""
+    context.user_data[f'pending_{user_id}'] = {
+        'source_type': source_type,
+        'source_url': source_url,
+        'file_path': file_path,
+        'mime_type': mime_type,
+    }
+
+
+def _pop_pending(context: ContextTypes.DEFAULT_TYPE, user_id: int) -> dict | None:
+    """Извлекает и удаляет ожидающие данные."""
+    return context.user_data.pop(f'pending_{user_id}', None)
+
+
+async def _ask_context(update: Update, context: ContextTypes.DEFAULT_TYPE,
+                       source_type: str, source_url: str,
+                       file_path: str = '', mime_type: str = ''):
+    """Сохраняет данные и спрашивает пользователя о контексте."""
+    user_id = update.effective_user.id
+    _store_pending(context, user_id, source_type, source_url, file_path, mime_type)
+    await update.message.reply_text(
+        "📥 Контент получен! Для кого генерировать гипотезу?",
+        reply_markup=CONTEXT_KEYBOARD
     )
 
 
@@ -67,8 +114,6 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     text = update.message.text.strip()
-
-    # Определяем тип
     source_type = detect_source_type(text)
     if source_type not in ('youtube', 'article'):
         await update.message.reply_text(
@@ -76,7 +121,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    await _process_and_respond(update, source_type=source_type, source_url=text)
+    await _ask_context(update, context, source_type=source_type, source_url=text)
 
 
 # ──────────────────────────────────────────────
@@ -100,11 +145,8 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await file.download_to_drive(tmp.name)
         file_path = tmp.name
 
-    await _process_and_respond(
-        update, source_type='voice',
-        source_url='voice_message',
-        file_path=file_path
-    )
+    await _ask_context(update, context, source_type='voice',
+                       source_url='voice_message', file_path=file_path)
 
 
 # ──────────────────────────────────────────────
@@ -124,11 +166,8 @@ async def handle_video_note(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await file.download_to_drive(tmp.name)
         file_path = tmp.name
 
-    await _process_and_respond(
-        update, source_type='video',
-        source_url='video_note',
-        file_path=file_path
-    )
+    await _ask_context(update, context, source_type='video',
+                       source_url='video_note', file_path=file_path)
 
 
 # ──────────────────────────────────────────────
@@ -143,7 +182,6 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     mime = doc.mime_type or ''
     fname = doc.file_name or ''
 
-    # Определяем тип по MIME и расширению
     if 'pdf' in mime or fname.lower().endswith('.pdf'):
         source_type = 'document'
         suffix = '.pdf'
@@ -168,10 +206,47 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await file.download_to_drive(tmp.name)
         file_path = tmp.name
 
-    await _process_and_respond(
-        update, source_type=source_type,
-        source_url=fname or source_type,
-        file_path=file_path
+    await _ask_context(update, context, source_type=source_type,
+                       source_url=fname or source_type, file_path=file_path,
+                       mime_type=mime)
+
+
+# ──────────────────────────────────────────────
+# Обработка нажатия кнопки выбора контекста
+# ──────────────────────────────────────────────
+
+async def handle_context_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """CallbackQueryHandler: пользователь выбрал контекст → запускаем пайплайн."""
+    query = update.callback_query
+    await query.answer()
+
+    if query.data not in CTX_LABELS:
+        await query.edit_message_text("❌ Неизвестный выбор. Пришли контент снова.")
+        return
+
+    user_id = query.from_user.id
+    pending = _pop_pending(context, user_id)
+    if not pending:
+        await query.edit_message_text(
+            "❌ Данные устарели или уже обработаны. Пришли контент ещё раз."
+        )
+        return
+
+    chosen_context, ctx_label = CTX_LABELS[query.data]
+
+    # Редактируем сообщение с кнопками → показываем статус
+    status_msg = await query.edit_message_text(
+        f"✅ Контекст: {ctx_label}\n🔍 Анализирую контент..."
+    )
+
+    await _run_pipeline(
+        status_msg=status_msg,
+        source_type=pending['source_type'],
+        source_url=pending['source_url'],
+        file_path=pending.get('file_path', ''),
+        mime_type=pending.get('mime_type', ''),
+        chosen_context=chosen_context,
+        ctx_label=ctx_label,
     )
 
 
@@ -179,15 +254,16 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # Основной пайплайн: обработка → гипотеза → БД → ответ
 # ──────────────────────────────────────────────
 
-async def _process_and_respond(
-    update: Update,
+async def _run_pipeline(
+    status_msg,
     source_type: str,
     source_url: str,
     file_path: str = '',
-    mime_type: str = ''
+    mime_type: str = '',
+    chosen_context: str = 'both',
+    ctx_label: str = '',
 ):
     """Общий пайплайн для всех типов контента."""
-    msg = await update.message.reply_text("🔍 Анализирую контент...")
 
     # 1. Извлекаем текст
     result = await process_content(
@@ -198,25 +274,27 @@ async def _process_and_respond(
     )
 
     if not result['success']:
-        await msg.edit_text(
+        await status_msg.edit_text(
             f"❌ Не удалось извлечь контент.\n"
             f"Причина: {result.get('error', 'неизвестная ошибка')}\n\n"
             f"Попробуй другую ссылку или формат."
         )
         return
 
-    await msg.edit_text("🧠 Генерирую гипотезу...")
+    await status_msg.edit_text(
+        f"✅ Контекст: {ctx_label}\n🧠 Генерирую гипотезу..."
+    )
 
     # 2. Генерируем гипотезу через Claude
     extraction, hypothesis = await content_to_hypothesis(
         raw_text=result['text'],
         source_type=source_type,
         source_url=source_url,
-        context=HYPOTHESIS_CONTEXT
+        context=chosen_context
     )
 
     if not extraction.get('is_useful', False):
-        await msg.edit_text(
+        await status_msg.edit_text(
             f"🤔 В этом материале не нашлось применимых идей.\n"
             f"Причина: {extraction.get('not_useful_reason', '—')}\n\n"
             f"Попробуй другой контент."
@@ -224,36 +302,40 @@ async def _process_and_respond(
         return
 
     if not hypothesis:
-        await msg.edit_text("❌ Не удалось сгенерировать гипотезу. Попробуй позже.")
+        await status_msg.edit_text("❌ Не удалось сгенерировать гипотезу. Попробуй позже.")
         return
 
-    await msg.edit_text("💾 Сохраняю в базу данных...")
+    await status_msg.edit_text(
+        f"✅ Контекст: {ctx_label}\n💾 Сохраняю в базу данных..."
+    )
+
+    # Убеждаемся, что context_type проставлен правильно
+    hypothesis['context_type'] = chosen_context
 
     # 3. Сохраняем в Supabase
     saved = await save_hypothesis(hypothesis, source_type, source_url)
 
     if not saved:
-        # Всё равно показываем гипотезу, даже если БД не сработала
-        await msg.edit_text(
+        await status_msg.edit_text(
             "⚠️ Гипотеза создана, но не удалось сохранить в БД.\n"
-            "Проверь настройки Supabase.\n\n" + _format_hypothesis(hypothesis)
+            "Проверь настройки Supabase.\n\n" + _format_hypothesis(hypothesis, ctx_label)
         )
         return
 
     # 4. Отвечаем пользователю
     dashboard_url = os.getenv('DASHBOARD_URL', '')
-    response = _format_hypothesis(hypothesis)
+    response = _format_hypothesis(hypothesis, ctx_label)
     if dashboard_url:
         response += f"\n\n📊 [Открыть дашборд]({dashboard_url})"
 
-    await msg.edit_text(response, parse_mode='Markdown')
+    await status_msg.edit_text(response, parse_mode='Markdown')
 
 
 # ──────────────────────────────────────────────
 # Форматирование ответа
 # ──────────────────────────────────────────────
 
-def _format_hypothesis(h: dict) -> str:
+def _format_hypothesis(h: dict, ctx_label: str = '') -> str:
     """Форматирует гипотезу для отправки в Telegram."""
     tasks = h.get('tasks', [])
     tasks_text = '\n'.join(f"  {i+1}. {t}" for i, t in enumerate(tasks[:4]))
@@ -265,8 +347,12 @@ def _format_hypothesis(h: dict) -> str:
         f"{primary.get('unit', '')}"
     ) if primary else '—'
 
+    header = f"✅ *Гипотеза сформирована!*"
+    if ctx_label:
+        header += f" {ctx_label}"
+
     return (
-        f"✅ *Гипотеза сформирована!*\n\n"
+        f"{header}\n\n"
         f"📌 *{h.get('title', 'Без названия')}*\n\n"
         f"💡 _{h.get('hypothesis_statement', '—')}_\n\n"
         f"📊 *Метрика:* {metric_text}\n"

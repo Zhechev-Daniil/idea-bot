@@ -164,4 +164,9 @@ async def content_to_hypothesis(
     if not extraction.get('is_useful', False):
         return extraction, {}
 
-    cleaned = extraction.get('cleaned_content', r
+    cleaned = extraction.get('cleaned_content', raw_text)
+
+    # Шаг 2: Генерация гипотезы
+    hypothesis = await generate_hypothesis(cleaned, source_type, source_url, context)
+
+    return extraction, hypothesis
