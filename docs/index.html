@@ -404,8 +404,8 @@ function makeSupabase(base, key) {
 const sb = makeSupabase(SUPABASE_URL, SUPABASE_KEY);
 let hypotheses = [], currentHypId = null, currentFilter = 'all', currentCtxFilter = 'all';
 let homeCtxFilter = 'all';
-let barChart = null, donutChart = null, detailChart = null;
-let pendingDeleteId = null, currentPage = 'home';
+let barChart = null, donutChart = null, metricCharts = [];
+let pendingDeleteId = null, currentPage = 'home', editingUpdateId = null, editingHypId = null;
 
 // ── NAVIGATION ───────────────────────────────────────────────
 function showPage(page) {
@@ -646,47 +646,96 @@ function renderDetail(h, updates, notes) {
           </div>
         </div>
       </div>
-      <div class="detail-grid">
-        <div class="detail-card">
-          <div class="detail-card-label">Динамика метрики</div>
-          ${updates.length?`<div style="height:150px;position:relative;"><canvas id="metric-chart"></canvas></div>`:`<div style="color:var(--text-muted);font-size:12px;padding:16px 0;text-align:center;">Нет данных — добавь обновление ↓</div>`}
-        </div>
-        <div class="detail-card">
-          <div class="detail-card-label">Задачи</div>
-          <ul class="task-list">
-            ${tasks.map((t,i)=>`<li class="task-item"><div class="task-check" id="task-${i}" onclick="toggleTask(${i})"></div><span>${escHtml(t)}</span></li>`).join('')}
-            ${!tasks.length?'<li style="color:var(--text-muted);font-size:12px;">Задачи не заданы</li>':''}
-          </ul>
-        </div>
+      <div class="detail-card">
+        <div class="detail-card-label">Задачи</div>
+        <ul class="task-list">
+          ${tasks.map((t,i)=>`<li class="task-item"><div class="task-check" id="task-${i}" onclick="toggleTask(${i})"></div><span>${escHtml(t)}</span></li>`).join('')}
+          ${!tasks.length?'<li style="color:var(--text-muted);font-size:12px;">Задачи не заданы</li>':''}
+        </ul>
       </div>
-      <div class="metric-form">
-        <div style="font-size:12px;font-weight:600;margin-bottom:10px;">📊 Добавить обновление метрики</div>
+      <div class="metric-form" id="metric-form-box">
+        <div style="font-size:12px;font-weight:600;margin-bottom:10px;" id="metric-form-title">📊 Добавить обновление метрики</div>
         <div class="form-row">
           <div class="form-group" style="min-width:130px;"><label class="form-label">Дата</label><input class="form-input" type="date" id="upd-date" value="${new Date().toISOString().slice(0,10)}"></div>
           <div class="form-group" style="min-width:140px;"><label class="form-label">Метрика</label><select class="form-select" id="upd-metric"><option value="${escHtml(h.primary_metric_name||'')}">${escHtml(h.primary_metric_name||'Главная')}</option>${secMetrics.map(m=>`<option value="${escHtml(m.name)}">${escHtml(m.name)}</option>`).join('')}</select></div>
           <div class="form-group" style="min-width:90px;"><label class="form-label">Значение</label><input class="form-input" type="number" id="upd-value" placeholder="0"></div>
           <div class="form-group" style="flex:1;"><label class="form-label">Заметка</label><input class="form-input" id="upd-note" placeholder="Опционально..."></div>
-          <button class="btn btn-primary" onclick="addMetricUpdate('${h.id}')">Добавить</button>
+          <button class="btn btn-primary" id="upd-submit-btn" onclick="submitMetricUpdate('${h.id}')">Добавить</button>
+          <button class="btn btn-ghost" id="upd-cancel-btn" style="display:none;" onclick="cancelMetricEdit()">Отмена</button>
         </div>
       </div>
-      ${updates.length?`<div class="detail-card"><div class="detail-card-label">История обновлений</div><div class="updates-log">${updates.slice().reverse().map(u=>`<div class="update-item"><div class="update-meta">${fmtDate(u.date)} · ${escHtml(u.metric_name)}</div><div class="update-value">${u.metric_value} ${h.primary_metric_unit||''}</div>${u.note?`<div class="update-note">${escHtml(u.note)}</div>`:''}</div>`).join('')}</div></div>`:''}
+      <div id="metrics-charts-container"></div>
+      ${updates.length ? '<div class="detail-card"><div class="detail-card-label">История обновлений</div><div class="updates-log">' + updates.slice().reverse().map(u => renderUpdateItem(u, h)).join('') + '</div></div>' : ''}
       ${(h.status==='success'||h.status==='failure')?`<div class="detail-card" style="border-color:${h.status==='success'?'var(--green)':'var(--red)'}"><div class="detail-card-label">Итог эксперимента</div><textarea class="form-input" id="result-text" rows="3" placeholder="Что получилось?">${escHtml(h.result_summary||'')}</textarea><button class="btn btn-ghost" style="margin-top:8px;" onclick="saveResult('${h.id}')">Сохранить итог</button></div>`:''}
     </div>`;
 
-  if (updates.length) setTimeout(()=>renderDetailChart(updates, h.primary_metric_name), 50);
+  if (updates.length) setTimeout(() => renderAllMetricCharts(updates, h), 50);
   tasks.forEach((_,i)=>{ if(localStorage.getItem('task_'+h.id+'_'+i)==='1'){const el=document.getElementById('task-'+i);if(el)el.classList.add('done');} });
 }
 
-function renderDetailChart(updates, metricName) {
-  const canvas = document.getElementById('metric-chart');
-  if (!canvas) return;
-  if (detailChart) { detailChart.destroy(); detailChart = null; }
-  const f = updates.filter(u=>u.metric_name===metricName);
-  if (!f.length) return;
-  detailChart = new Chart(canvas, {
-    type: 'line',
-    data: { labels: f.map(u=>fmtDate(u.date)), datasets: [{ data: f.map(u=>u.metric_value), borderColor:'#4361ee', backgroundColor:'rgba(67,97,238,0.08)', tension:0.3, fill:true, pointBackgroundColor:'#4361ee', pointRadius:4 }] },
-    options: { responsive:true, maintainAspectRatio:false, plugins:{legend:{display:false}}, scales:{ x:{grid:{display:false},ticks:{color:'#9ca3af',font:{size:10}}}, y:{grid:{color:'#f3f4f6'},ticks:{color:'#9ca3af',font:{size:10}}} } }
+// ── METRIC HELPERS ───────────────────────────────────────────
+function getMetricUnit(h, metricName) {
+  if (metricName === h.primary_metric_name) return h.primary_metric_unit || '';
+  var sec = Array.isArray(h.secondary_metrics) ? h.secondary_metrics : [];
+  var found = sec.find(function(m){ return m.name === metricName; });
+  return found ? (found.unit || '') : '';
+}
+
+function renderUpdateItem(u, h) {
+  var unit = getMetricUnit(h, u.metric_name);
+  var noteHtml = u.note ? '<div class="update-note">' + escHtml(u.note) + '</div>' : '';
+  var safeNote = (u.note||'').replace(/\\/g,'\\\\').replace(/'/g,"\\'");
+  var safeMetric = escHtml(u.metric_name).replace(/'/g,"\\'");
+  return '<div class="update-item">'
+    + '<div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px;">'
+    + '<div style="flex:1;">'
+    + '<div class="update-meta">' + fmtDate(u.date) + ' · ' + escHtml(u.metric_name) + (unit ? ' · ' + escHtml(unit) : '') + '</div>'
+    + '<div class="update-value">' + u.metric_value + (unit ? '<span style="font-size:13px;font-weight:400;color:var(--text-muted);margin-left:4px;">' + escHtml(unit) + '</span>' : '') + '</div>'
+    + noteHtml
+    + '</div>'
+    + '<button style="background:none;border:none;cursor:pointer;font-size:14px;color:var(--text-muted);padding:2px 6px;flex-shrink:0;border-radius:4px;" title="Редактировать" '
+    + 'onmouseover="this.style.background=\'var(--surface2)\'" onmouseout="this.style.background=\'none\'" '
+    + 'onclick="editMetricUpdate(\'' + u.id + '\',\'' + u.date + '\',\'' + safeMetric + '\',' + u.metric_value + ',\'' + safeNote + '\')">'
+    + '✏️</button>'
+    + '</div></div>';
+}
+
+function renderAllMetricCharts(updates, h) {
+  var container = document.getElementById('metrics-charts-container');
+  if (!container) return;
+  metricCharts.forEach(function(c){ try{ c.destroy(); }catch(e){} });
+  metricCharts = [];
+  var names = [];
+  updates.forEach(function(u){ if(names.indexOf(u.metric_name)<0) names.push(u.metric_name); });
+  if (!names.length) { container.innerHTML = ''; return; }
+  var colors = ['#4361ee','#16a34a','#d97706','#7c3aed','#dc2626','#0369a1'];
+  var html = '<div class="detail-card"><div class="detail-card-label">📈 Динамика метрик</div>'
+    + '<div style="display:flex;flex-direction:column;gap:18px;">';
+  names.forEach(function(name, i){
+    var unit = getMetricUnit(h, name);
+    var label = escHtml(name) + (unit ? ' (' + escHtml(unit) + ')' : '');
+    html += '<div><div style="font-size:11px;font-weight:600;color:' + colors[i%colors.length] + ';margin-bottom:6px;">' + label + '</div>'
+      + '<div style="height:130px;position:relative;"><canvas id="chart-metric-' + i + '"></canvas></div></div>';
+  });
+  html += '</div></div>';
+  container.innerHTML = html;
+  names.forEach(function(name, i){
+    var data = updates.filter(function(u){ return u.metric_name === name; });
+    if (!data.length) return;
+    var canvas = document.getElementById('chart-metric-' + i);
+    if (!canvas) return;
+    var color = colors[i%colors.length];
+    var chart = new Chart(canvas, {
+      type: 'line',
+      data: { labels: data.map(function(u){ return fmtDate(u.date); }),
+        datasets: [{ data: data.map(function(u){ return u.metric_value; }),
+          borderColor: color, backgroundColor: color.replace(')', ',0.08)').replace('rgb','rgba'),
+          tension: 0.3, fill: true, pointBackgroundColor: color, pointRadius: 4 }] },
+      options: { responsive:true, maintainAspectRatio:false, plugins:{legend:{display:false}},
+        scales:{ x:{grid:{display:false},ticks:{color:'#9ca3af',font:{size:10}}},
+          y:{grid:{color:'#f3f4f6'},ticks:{color:'#9ca3af',font:{size:10}}} } }
+    });
+    metricCharts.push(chart);
   });
 }
 
@@ -708,17 +757,23 @@ async function updateStatus(id, status) {
   await loadHypotheses();
 }
 
-async function addMetricUpdate(hypId) {
+async function submitMetricUpdate(hypId) {
   const date = document.getElementById('upd-date').value;
   const metric = document.getElementById('upd-metric').value;
   const value = parseFloat(document.getElementById('upd-value').value);
   const note = document.getElementById('upd-note').value.trim();
   if (!date||isNaN(value)) { showToast('Заполни дату и значение','error'); return; }
-  const { error } = await sb.from('metric_updates').insert({ hypothesis_id:hypId, date, metric_name:metric, metric_value:value, note:note||null });
+  let error;
+  if (editingUpdateId) {
+    const res = await sb.from('metric_updates').update({ date, metric_name:metric, metric_value:value, note:note||null }).eq('id', editingUpdateId);
+    error = res.error;
+  } else {
+    const res = await sb.from('metric_updates').insert({ hypothesis_id:hypId, date, metric_name:metric, metric_value:value, note:note||null });
+    error = res.error;
+  }
   if (error) { showToast('Ошибка: '+error.message,'error'); return; }
-  showToast('Метрика добавлена','success');
-  document.getElementById('upd-value').value='';
-  document.getElementById('upd-note').value='';
+  showToast(editingUpdateId ? 'Обновление сохранено' : 'Метрика добавлена','success');
+  cancelMetricEdit();
   const h = hypotheses.find(h=>h.id===hypId);
   if (h) {
     const [{data:updates},{data:notes}] = await Promise.all([
@@ -727,6 +782,40 @@ async function addMetricUpdate(hypId) {
     ]);
     renderDetail(h, updates||[], notes||[]);
   }
+}
+
+function editMetricUpdate(updateId, date, metricName, value, note) {
+  editingUpdateId = updateId;
+  const titleEl = document.getElementById('metric-form-title');
+  const submitBtn = document.getElementById('upd-submit-btn');
+  const cancelBtn = document.getElementById('upd-cancel-btn');
+  if (titleEl) titleEl.textContent = '✏️ Редактировать запись метрики';
+  if (submitBtn) submitBtn.textContent = 'Сохранить';
+  if (cancelBtn) cancelBtn.style.display = '';
+  const dateEl = document.getElementById('upd-date');
+  const metricEl = document.getElementById('upd-metric');
+  const valueEl = document.getElementById('upd-value');
+  const noteEl = document.getElementById('upd-note');
+  if (dateEl) dateEl.value = date;
+  if (metricEl) { Array.from(metricEl.options).forEach(function(o){ o.selected = (o.value === metricName); }); }
+  if (valueEl) valueEl.value = value;
+  if (noteEl) noteEl.value = note || '';
+  const form = document.getElementById('metric-form-box');
+  if (form) form.scrollIntoView({ behavior:'smooth', block:'center' });
+}
+
+function cancelMetricEdit() {
+  editingUpdateId = null;
+  const titleEl = document.getElementById('metric-form-title');
+  const submitBtn = document.getElementById('upd-submit-btn');
+  const cancelBtn = document.getElementById('upd-cancel-btn');
+  if (titleEl) titleEl.textContent = '📊 Добавить обновление метрики';
+  if (submitBtn) submitBtn.textContent = 'Добавить';
+  if (cancelBtn) cancelBtn.style.display = 'none';
+  const valueEl = document.getElementById('upd-value');
+  const noteEl = document.getElementById('upd-note');
+  if (valueEl) valueEl.value = '';
+  if (noteEl) noteEl.value = '';
 }
 
 async function saveResult(id) {
