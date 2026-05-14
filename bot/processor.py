@@ -427,6 +427,10 @@ async def process_content(
                 with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
                     text = f.read()[:8000]
 
+        elif source_type == 'other' and mime_type.startswith('__text__:'):
+            # Свободный текст, переданный напрямую из сообщения
+            text = mime_type[len('__text__:'):]
+
         else:
             error = f"Неизвестный тип источника: {source_type}"
 

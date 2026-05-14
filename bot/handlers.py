@@ -106,8 +106,10 @@ async def _ask_context(update: Update, context: ContextTypes.DEFAULT_TYPE,
 
 
 # ──────────────────────────────────────────────
-# Обработка текстовых сообщений (URL)
+# Обработка текстовых сообщений (URL или свободный текст)
 # ──────────────────────────────────────────────
+
+MIN_TEXT_LENGTH = 30  # минимум символов для свободного текста
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_allowed(update):
@@ -115,13 +117,23 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     text = update.message.text.strip()
     source_type = detect_source_type(text)
-    if source_type not in ('youtube', 'article'):
-        await update.message.reply_text(
-            "Пришли ссылку на YouTube, статью или другой URL, и я сформирую гипотезу."
-        )
-        return
 
-    await _ask_context(update, context, source_type=source_type, source_url=text)
+    if source_type in ('youtube', 'article'):
+        # Ссылка — обрабатываем как раньше
+        await _ask_context(update, context, source_type=source_type, source_url=text)
+
+    elif len(text) >= MIN_TEXT_LENGTH:
+        # Свободный текст достаточной длины — генерируем гипотезу напрямую
+        await _ask_context(update, context, source_type='other', source_url='text_message', file_path='', mime_type='__text__:' + text)
+
+    else:
+        await update.message.reply_text(
+            "Пришли:\n"
+            "• 🔗 Ссылку на YouTube, статью, Reels\n"
+            "• 💬 Текст или идею (от 30 символов)\n"
+            "• 🎙 Голосовое сообщение\n"
+            "• 📄 PDF или DOCX документ"
+        )
 
 
 # ──────────────────────────────────────────────
